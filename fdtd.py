@@ -7,11 +7,13 @@ class FDTD:
     C = 340.3
     AIR_DENSITY = 1.225
     BASE_PRESSURE = 0
+    DAMPING_COEF = 0.999
 
     def __init__(
         self,
         box_dimensions,
         ds,
+        solid,
         device=None,
         cfl_factor=0.5,
         pml_layers=8,
@@ -40,6 +42,11 @@ class FDTD:
         self.vel_z = torch.empty(self.grid_dimensions).to(dtype).to(self.device)
         self.attenuation = torch.ones(self.grid_dimensions).to(dtype).to(self.device)
         self._make_pml(pml_layers)
+        self.solid_damping = (
+            (1 - torch.tensor(solid).to(self.device))
+            * self.DAMPING_COEF
+            / (self.attenuation * self.dt + 1)
+        )
         self.reset()
 
     def _make_pml(self, pml_layers):
@@ -75,12 +82,15 @@ class FDTD:
                 self.vel_x -= self.vel_coef * (
                     torch.roll(self.pressure, 1, dims=0) - self.pressure
                 )
+                self.vel_x *= self.solid_damping
                 self.vel_y -= self.vel_coef * (
                     torch.roll(self.pressure, 1, dims=1) - self.pressure
                 )
+                self.vel_y *= self.solid_damping
                 self.vel_z -= self.vel_coef * (
                     torch.roll(self.pressure, 1, dims=2) - self.pressure
                 )
+                self.vel_z *= self.solid_damping
 
                 self.pressure -= self.pressure_coef * (
                     self.vel_x
