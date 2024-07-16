@@ -33,6 +33,7 @@ class FDTD:
         self.pressure_coef = self.AIR_DENSITY * self.C**2 * self.dt / self.ds
         self.vel_coef = self.dt / (self.ds * self.AIR_DENSITY)
         self.dtype = dtype
+        self.box_dimensions = box_dimensions
         self.grid_dimensions = (
             torch.round(torch.Tensor(box_dimensions) / self.ds).int().tolist()
         )
@@ -42,10 +43,11 @@ class FDTD:
         self.vel_z = torch.empty(self.grid_dimensions).to(dtype).to(self.device)
         self.attenuation = torch.ones(self.grid_dimensions).to(dtype).to(self.device)
         self._make_pml(pml_layers)
-        self.solid_damping = (
-            (1 - torch.tensor(solid).to(self.device))
-            * self.DAMPING_COEF
-            / (self.attenuation * self.dt + 1)
+        self.solid = solid
+        self.emitter_amps = torch.zeros(self.grid_dimensions).to(dtype).to(self.device)
+        self.emitter_freqs = torch.zeros(self.grid_dimensions).to(dtype).to(self.device)
+        self.emitter_phases = (
+            torch.zeros(self.grid_dimensions).to(dtype).to(self.device)
         )
         self.reset()
 
@@ -68,6 +70,11 @@ class FDTD:
     def reset(self):
         self.pressure[...] = self.BASE_PRESSURE
         self.vel_x[...] = self.vel_y[...] = self.vel_z[...] = 0
+        self.solid_damping = (
+            (1 - torch.tensor(self.solid).to(self.device))
+            * self.DAMPING_COEF
+            / (self.attenuation * self.dt + 1)
+        )
         self.t = 0
 
     def iterate(self, iters=1, seconds=None, warm_start=True, show_progress=True):
@@ -100,6 +107,35 @@ class FDTD:
                     + self.vel_z
                     - torch.roll(self.vel_z, -1, dims=2)
                 )
+
                 self.pressure /= attenuation_dt
 
+                phase = torch.sin(
+                    2 * np.pi * self.emitter_freqs * self.t - self.emitter_phases
+                ).to(self.device)
+                self.pressure[self.emitter_amps != 0] = self.BASE_PRESSURE
+                self.pressure += self.emitter_amps * phase
+
                 self.t += self.dt
+
+    def add_point_emitter(self, position, amp, freq, phase):
+        assert (
+            self.t == 0
+        ), "Cannot add an emitter to a started simulation. Re-instantiate the object or call reset()"
+        position = self._world_to_grid_coords(position)
+        self.emitter_amps[*position] = amp
+        self.emitter_freqs[*position] = freq
+        self.emitter_phases[*position] = phase
+        self.reset()
+        return self
+
+    def _world_to_grid_coords(self, position):
+        return (
+            (
+                np.array(self.grid_dimensions)
+                * np.array(position)
+                / np.array(self.box_dimensions)
+            )
+            .round()
+            .astype(int)
+        )
