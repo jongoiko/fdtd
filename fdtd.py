@@ -37,17 +37,25 @@ class FDTD:
         self.grid_dimensions = (
             torch.round(torch.Tensor(box_dimensions) / self.ds).int().tolist()
         )
-        self.pressure = torch.empty(self.grid_dimensions).to(dtype).to(self.device)
-        self.vel_x = torch.empty(self.grid_dimensions).to(dtype).to(self.device)
-        self.vel_y = torch.empty(self.grid_dimensions).to(dtype).to(self.device)
-        self.vel_z = torch.empty(self.grid_dimensions).to(dtype).to(self.device)
-        self.attenuation = torch.ones(self.grid_dimensions).to(dtype).to(self.device)
+        self.pressure = torch.empty(
+            self.grid_dimensions, dtype=dtype, device=self.device
+        )
+        self.vel_x = torch.empty(self.grid_dimensions, dtype=dtype, device=self.device)
+        self.vel_y = torch.empty(self.grid_dimensions, dtype=dtype, device=self.device)
+        self.vel_z = torch.empty(self.grid_dimensions, dtype=dtype, device=self.device)
+        self.attenuation = torch.ones(
+            self.grid_dimensions, dtype=dtype, device=self.device
+        )
         self._make_pml(pml_layers)
         self.solid = solid
-        self.emitter_amps = torch.zeros(self.grid_dimensions).to(dtype).to(self.device)
-        self.emitter_freqs = torch.zeros(self.grid_dimensions).to(dtype).to(self.device)
-        self.emitter_phases = (
-            torch.zeros(self.grid_dimensions).to(dtype).to(self.device)
+        self.emitter_amps = torch.zeros(
+            self.grid_dimensions, dtype=dtype, device=self.device
+        )
+        self.emitter_freqs = torch.zeros(
+            self.grid_dimensions, dtype=dtype, device=self.device
+        )
+        self.emitter_phases = torch.zeros(
+            self.grid_dimensions, dtype=dtype, device=self.device
         )
         self.reset()
 
