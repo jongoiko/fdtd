@@ -92,39 +92,38 @@ class FDTD:
 
         attenuation_dt = self.attenuation * self.dt + 1
         iter_range = tqdm(range(n_iters)) if show_progress else range(n_iters)
-        with torch.no_grad():
-            for _ in iter_range:
-                self.vel_x -= self.vel_coef * (
-                    torch.roll(self.pressure, 1, dims=0) - self.pressure
-                )
-                self.vel_x *= self.solid_damping
-                self.vel_y -= self.vel_coef * (
-                    torch.roll(self.pressure, 1, dims=1) - self.pressure
-                )
-                self.vel_y *= self.solid_damping
-                self.vel_z -= self.vel_coef * (
-                    torch.roll(self.pressure, 1, dims=2) - self.pressure
-                )
-                self.vel_z *= self.solid_damping
+        for _ in iter_range:
+            self.vel_x -= self.vel_coef * (
+                torch.roll(self.pressure, 1, dims=0) - self.pressure
+            )
+            self.vel_x *= self.solid_damping
+            self.vel_y -= self.vel_coef * (
+                torch.roll(self.pressure, 1, dims=1) - self.pressure
+            )
+            self.vel_y *= self.solid_damping
+            self.vel_z -= self.vel_coef * (
+                torch.roll(self.pressure, 1, dims=2) - self.pressure
+            )
+            self.vel_z *= self.solid_damping
 
-                self.pressure -= self.pressure_coef * (
-                    self.vel_x
-                    - torch.roll(self.vel_x, -1, dims=0)
-                    + self.vel_y
-                    - torch.roll(self.vel_y, -1, dims=1)
-                    + self.vel_z
-                    - torch.roll(self.vel_z, -1, dims=2)
-                )
+            self.pressure -= self.pressure_coef * (
+                self.vel_x
+                - torch.roll(self.vel_x, -1, dims=0)
+                + self.vel_y
+                - torch.roll(self.vel_y, -1, dims=1)
+                + self.vel_z
+                - torch.roll(self.vel_z, -1, dims=2)
+            )
 
-                self.pressure /= attenuation_dt
+            self.pressure /= attenuation_dt
 
-                phase = torch.sin(
-                    2 * np.pi * self.emitter_freqs * self.t - self.emitter_phases
-                ).to(self.device)
-                self.pressure[self.emitter_amps != 0] = self.BASE_PRESSURE
-                self.pressure += self.emitter_amps * phase
+            phase = torch.sin(
+                2 * np.pi * self.emitter_freqs * self.t - self.emitter_phases
+            ).to(self.device)
+            self.pressure[self.emitter_amps != 0] = self.BASE_PRESSURE
+            self.pressure += self.emitter_amps * phase
 
-                self.t += self.dt
+            self.t += self.dt
 
     def add_point_emitter(self, position, amp, freq, phase):
         assert (
