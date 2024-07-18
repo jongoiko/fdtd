@@ -57,6 +57,12 @@ class FDTD:
         self.emitter_phases = torch.zeros(
             self.grid_dimensions, dtype=dtype, device=self.device
         )
+        self.emitter_angles = torch.zeros(
+            self.grid_dimensions + [2], dtype=dtype, device=self.device
+        )
+        self.is_point_emitter = torch.zeros(
+            self.grid_dimensions, dtype=bool, device=self.device
+        )
         self.reset()
 
     def _make_pml(self, pml_layers):
@@ -107,6 +113,34 @@ class FDTD:
                 )
                 self.vel_z *= self.solid_damping
 
+                phase = torch.sin(
+                    2 * np.pi * self.emitter_freqs * self.t - self.emitter_phases
+                ).to(self.device)
+
+                directed_emitter_amps = self.emitter_amps.where(
+                    self.is_point_emitter.logical_not(), 0.0
+                )
+                self.vel_x *= 1 - directed_emitter_amps
+                self.vel_x += (
+                    directed_emitter_amps
+                    * torch.sin(self.emitter_angles[..., 0])
+                    * phase
+                )
+                self.vel_y *= 1 - directed_emitter_amps
+                self.vel_y += (
+                    directed_emitter_amps
+                    * torch.cos(self.emitter_angles[..., 0])
+                    * torch.cos(np.pi / 2 + self.emitter_angles[..., 1])
+                    * phase
+                )
+                self.vel_z *= 1 - directed_emitter_amps
+                self.vel_z += (
+                    directed_emitter_amps
+                    * torch.cos(self.emitter_angles[..., 0])
+                    * torch.cos(self.emitter_angles[..., 1])
+                    * phase
+                )
+
                 self.pressure -= self.pressure_coef * (
                     self.vel_x
                     - torch.roll(self.vel_x, -1, dims=0)
@@ -118,15 +152,14 @@ class FDTD:
 
                 self.pressure /= attenuation_dt
 
-                phase = torch.sin(
-                    2 * np.pi * self.emitter_freqs * self.t - self.emitter_phases
-                ).to(self.device)
                 self.pressure[self.emitter_amps != 0] = self.BASE_PRESSURE
-                self.pressure += self.emitter_amps * phase
+                self.pressure += (self.emitter_amps * phase).where(
+                    self.is_point_emitter, 0.0
+                )
 
                 self.t += self.dt
 
-    def add_point_emitter(self, position, amp, freq, phase):
+    def add_emitter(self, position, amp, freq, phase, angle=None):
         assert (
             self.t == 0
         ), "Cannot add an emitter to a started simulation. Re-instantiate the object or call reset()"
@@ -134,6 +167,11 @@ class FDTD:
         self.emitter_amps[*position] = amp
         self.emitter_freqs[*position] = freq
         self.emitter_phases[*position] = phase
+        self.is_point_emitter[*position] = angle is None
+        if angle is not None:
+            self.emitter_angles[*position] = torch.tensor(angle).to(
+                self.emitter_angles.dtype
+            )
         self.reset()
         return self
 
