@@ -35,7 +35,7 @@ class FDTD:
         self.dtype = dtype
         self.box_dimensions = box_dimensions
         self.grid_dimensions = (
-            torch.round(torch.Tensor(box_dimensions) / self.ds).int().tolist()
+            torch.round(torch.as_tensor(box_dimensions) / self.ds).int().tolist()
         )
         self.pressure = torch.empty(
             self.grid_dimensions, dtype=dtype, device=self.device
@@ -79,7 +79,7 @@ class FDTD:
         self.pressure[...] = self.BASE_PRESSURE
         self.vel_x[...] = self.vel_y[...] = self.vel_z[...] = 0
         self.solid_damping = (
-            (1 - torch.tensor(self.solid).to(self.device))
+            (1 - torch.as_tensor(self.solid).to(self.device))
             * self.DAMPING_COEF
             / (self.attenuation * self.dt + 1)
         )
