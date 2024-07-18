@@ -58,7 +58,7 @@ class FDTD:
             self.grid_dimensions, dtype=dtype, device=self.device
         )
         self.emitter_angles = torch.zeros(
-            self.grid_dimensions + [2], dtype=dtype, device=self.device
+            self.grid_dimensions + [3], dtype=dtype, device=self.device
         )
         self.is_point_emitter = torch.zeros(
             self.grid_dimensions, dtype=bool, device=self.device
@@ -122,23 +122,15 @@ class FDTD:
                 )
                 self.vel_x *= 1 - directed_emitter_amps
                 self.vel_x += (
-                    directed_emitter_amps
-                    * torch.sin(self.emitter_angles[..., 0])
-                    * phase
+                    directed_emitter_amps * self.emitter_angles[..., 0] * phase
                 )
                 self.vel_y *= 1 - directed_emitter_amps
                 self.vel_y += (
-                    directed_emitter_amps
-                    * torch.cos(self.emitter_angles[..., 0])
-                    * torch.cos(np.pi / 2 + self.emitter_angles[..., 1])
-                    * phase
+                    directed_emitter_amps * self.emitter_angles[..., 1] * phase
                 )
                 self.vel_z *= 1 - directed_emitter_amps
                 self.vel_z += (
-                    directed_emitter_amps
-                    * torch.cos(self.emitter_angles[..., 0])
-                    * torch.cos(self.emitter_angles[..., 1])
-                    * phase
+                    directed_emitter_amps * self.emitter_angles[..., 2] * phase
                 )
 
                 self.pressure -= self.pressure_coef * (
@@ -169,8 +161,12 @@ class FDTD:
         self.emitter_phases[*position] = phase
         self.is_point_emitter[*position] = angle is None
         if angle is not None:
-            self.emitter_angles[*position] = torch.tensor(angle).to(
-                self.emitter_angles.dtype
+            self.emitter_angles[*position] = torch.as_tensor(
+                [
+                    np.sin(angle[0]),
+                    np.cos(angle[0]) * np.cos(np.pi / 2 + angle[1]),
+                    np.cos(angle[0]) * np.cos(angle[1]),
+                ]
             )
         self.reset()
         return self
