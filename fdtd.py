@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import skimage.draw
 from tqdm import tqdm
 
 
@@ -151,24 +152,48 @@ class FDTD:
 
                 self.t += self.dt
 
-    def add_emitter(self, position, amp, freq, phase, angle=None):
+    def _assert_can_add_emitter(self):
         assert (
             self.t == 0
         ), "Cannot add an emitter to a started simulation. Re-instantiate the object or call reset()"
+
+    def add_point_emitter(self, position, amp, freq, phase):
+        self._assert_can_add_emitter()
         position = self._world_to_grid_coords(position)
         self.emitter_amps[*position] = amp
         self.emitter_freqs[*position] = freq
         self.emitter_phases[*position] = phase
-        self.is_point_emitter[*position] = angle is None
-        if angle is not None:
-            self.emitter_angles[*position] = torch.as_tensor(
-                [
-                    np.sin(angle[0]),
-                    np.cos(angle[0]) * np.cos(np.pi / 2 + angle[1]),
-                    np.cos(angle[0]) * np.cos(angle[1]),
-                ]
+        self.is_point_emitter[*position] = True
+        return self
+
+    def add_circular_emitter(self, position, amp, freq, phase, angle, radius):
+        self._assert_can_add_emitter()
+        normal = np.array(
+            [
+                np.sin(angle[0]),
+                np.cos(angle[0]) * np.cos(np.pi / 2 + angle[1]),
+                np.cos(angle[0]) * np.cos(angle[1]),
+            ]
+        )
+        basis_1, basis_2 = FDTD._normal_to_plane_basis(normal)
+        for theta in np.linspace(-np.pi, np.pi, 1000):
+            points = [
+                self._world_to_grid_coords(
+                    (
+                        position
+                        + radius * (np.cos(angle) * basis_1 + np.sin(angle) * basis_2)
+                    )
+                )
+                for angle in [theta, theta + np.pi]
+            ]
+            line = skimage.draw.line_nd(*points)
+            self.emitter_amps[line] = amp
+            self.emitter_freqs[line] = freq
+            self.emitter_phases[line] = phase
+            self.emitter_angles[line] = torch.as_tensor(
+                normal, dtype=self.emitter_angles.dtype, device=self.device
             )
-        self.reset()
+            self.is_point_emitter[line] = False
         return self
 
     def _world_to_grid_coords(self, position):
@@ -181,3 +206,17 @@ class FDTD:
             .round()
             .astype(int)
         )
+
+    @staticmethod
+    def _normal_to_plane_basis(normal):
+        basis_1 = np.array([normal[0] + 1] + normal[1:].tolist())
+        basis_1 -= (basis_1 @ normal) * normal
+        basis_1 /= np.linalg.norm(basis_1)
+        basis_2 = np.cross(normal, basis_1)
+        basis_2 /= np.linalg.norm(basis_2)
+        assert (
+            np.isclose(basis_1 @ normal, 0.0)
+            and np.isclose(basis_1 @ basis_2, 0.0)
+            and np.isclose(basis_2 @ normal, 0.0)
+        )
+        return basis_1, basis_2
