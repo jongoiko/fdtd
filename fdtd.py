@@ -152,7 +152,7 @@ class FDTD:
 
     def add_point_emitter(self, position, amp, freq, phase):
         self._assert_can_add_emitter()
-        position = self._world_to_grid_coords(position)
+        position = self.world_to_grid_coords(position)
         self.emitter_amps[*position] = amp
         self.emitter_freqs[*position] = freq
         self.emitter_phases[*position] = phase
@@ -171,7 +171,7 @@ class FDTD:
         basis_1, basis_2 = FDTD._normal_to_plane_basis(normal)
         for theta in np.linspace(-np.pi, np.pi, 1000):
             points = [
-                self._world_to_grid_coords(
+                self.world_to_grid_coords(
                     (
                         position
                         + radius * (np.cos(angle) * basis_1 + np.sin(angle) * basis_2)
@@ -189,7 +189,7 @@ class FDTD:
             self.is_point_emitter[line] = False
         return self
 
-    def _world_to_grid_coords(self, position):
+    def world_to_grid_coords(self, position):
         return (
             (
                 np.array(self.grid_dimensions)
