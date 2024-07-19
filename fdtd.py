@@ -47,6 +47,9 @@ class FDTD:
         self.attenuation = torch.ones(
             self.grid_dimensions, dtype=dtype, device=self.device
         )
+        self.amplitude = torch.zeros(
+            self.grid_dimensions, dtype=dtype, device=self.device
+        )
         self._make_pml(pml_layers)
         self.solid = solid
         self.emitter_amps = torch.zeros(
@@ -90,16 +93,27 @@ class FDTD:
             * self.DAMPING_COEF
             / (self.attenuation * self.dt + 1)
         )
+        self.amplitude[...] = 0
         self.t = 0
 
-    def iterate(self, iters=1, seconds=None, warm_start=True, show_progress=True):
-        n_iters = round(seconds / self.dt) if seconds is not None else iters
+    def iterate(
+        self,
+        iters=1,
+        seconds=None,
+        warm_start=True,
+        show_progress=True,
+        amp_measurement_warmup=None,
+    ):
+        if seconds is not None:
+            iters = round(seconds / self.dt)
+            if amp_measurement_warmup is not None:
+                amp_measurement_warmup = round(amp_measurement_warmup / self.dt)
         if not warm_start:
             self.reset()
 
         attenuation_dt = self.attenuation * self.dt + 1
-        iter_range = tqdm(range(n_iters)) if show_progress else range(n_iters)
-        for _ in iter_range:
+        iter_range = tqdm(range(iters)) if show_progress else range(iters)
+        for i in iter_range:
             self.vel_x -= self.vel_coef * (
                 torch.roll(self.pressure, -1, dims=0) - self.pressure
             )
@@ -143,7 +157,13 @@ class FDTD:
                 self.is_point_emitter, 0.0
             )
 
+            if amp_measurement_warmup is not None and i >= amp_measurement_warmup:
+                self._get_amp()
+
             self.t += self.dt
+
+    def _get_amp(self):
+        self.amplitude = torch.maximum(self.amplitude, torch.abs(self.pressure))
 
     def _assert_can_add_emitter(self):
         assert (
