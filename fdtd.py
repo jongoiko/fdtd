@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import skimage.draw
 from tqdm import tqdm
 
 
@@ -57,6 +58,12 @@ class FDTD:
         self.emitter_phases = torch.zeros(
             self.grid_dimensions, dtype=dtype, device=self.device
         )
+        self.emitter_angles = torch.zeros(
+            self.grid_dimensions + [3], dtype=dtype, device=self.device
+        )
+        self.is_point_emitter = torch.zeros(
+            self.grid_dimensions, dtype=bool, device=self.device
+        )
         self.reset()
 
     def _make_pml(self, pml_layers):
@@ -106,6 +113,20 @@ class FDTD:
             )
             self.vel_z *= self.solid_damping
 
+            phase = torch.sin(
+                2 * np.pi * self.emitter_freqs * self.t - self.emitter_phases
+            ).to(self.device)
+
+            directed_emitter_amps = self.emitter_amps.where(
+                self.is_point_emitter.logical_not(), 0.0
+            )
+            self.vel_x *= 1 - directed_emitter_amps
+            self.vel_x += directed_emitter_amps * self.emitter_angles[..., 0] * phase
+            self.vel_y *= 1 - directed_emitter_amps
+            self.vel_y += directed_emitter_amps * self.emitter_angles[..., 1] * phase
+            self.vel_z *= 1 - directed_emitter_amps
+            self.vel_z += directed_emitter_amps * self.emitter_angles[..., 2] * phase
+
             self.pressure -= self.pressure_coef * (
                 self.vel_x
                 - torch.roll(self.vel_x, 1, dims=0)
@@ -117,23 +138,55 @@ class FDTD:
 
             self.pressure /= attenuation_dt
 
-            phase = torch.sin(
-                2 * np.pi * self.emitter_freqs * self.t - self.emitter_phases
-            ).to(self.device)
             self.pressure[self.emitter_amps != 0] = self.BASE_PRESSURE
-            self.pressure += self.emitter_amps * phase
+            self.pressure += (self.emitter_amps * phase).where(
+                self.is_point_emitter, 0.0
+            )
 
             self.t += self.dt
 
-    def add_point_emitter(self, position, amp, freq, phase):
+    def _assert_can_add_emitter(self):
         assert (
             self.t == 0
         ), "Cannot add an emitter to a started simulation. Re-instantiate the object or call reset()"
+
+    def add_point_emitter(self, position, amp, freq, phase):
+        self._assert_can_add_emitter()
         position = self._world_to_grid_coords(position)
         self.emitter_amps[*position] = amp
         self.emitter_freqs[*position] = freq
         self.emitter_phases[*position] = phase
-        self.reset()
+        self.is_point_emitter[*position] = True
+        return self
+
+    def add_circular_emitter(self, position, amp, freq, phase, angle, radius):
+        self._assert_can_add_emitter()
+        normal = np.array(
+            [
+                np.sin(angle[0]),
+                np.cos(angle[0]) * np.cos(np.pi / 2 + angle[1]),
+                np.cos(angle[0]) * np.cos(angle[1]),
+            ]
+        )
+        basis_1, basis_2 = FDTD._normal_to_plane_basis(normal)
+        for theta in np.linspace(-np.pi, np.pi, 1000):
+            points = [
+                self._world_to_grid_coords(
+                    (
+                        position
+                        + radius * (np.cos(angle) * basis_1 + np.sin(angle) * basis_2)
+                    )
+                )
+                for angle in [theta, theta + np.pi]
+            ]
+            line = skimage.draw.line_nd(*points)
+            self.emitter_amps[line] = amp
+            self.emitter_freqs[line] = freq
+            self.emitter_phases[line] = phase
+            self.emitter_angles[line] = torch.as_tensor(
+                normal, dtype=self.emitter_angles.dtype, device=self.device
+            )
+            self.is_point_emitter[line] = False
         return self
 
     def _world_to_grid_coords(self, position):
@@ -146,3 +199,17 @@ class FDTD:
             .round()
             .astype(int)
         )
+
+    @staticmethod
+    def _normal_to_plane_basis(normal):
+        basis_1 = np.array([normal[0] + 1] + normal[1:].tolist())
+        basis_1 -= (basis_1 @ normal) * normal
+        basis_1 /= np.linalg.norm(basis_1)
+        basis_2 = np.cross(normal, basis_1)
+        basis_2 /= np.linalg.norm(basis_2)
+        assert (
+            np.isclose(basis_1 @ normal, 0.0)
+            and np.isclose(basis_1 @ basis_2, 0.0)
+            and np.isclose(basis_2 @ normal, 0.0)
+        )
+        return basis_1, basis_2
