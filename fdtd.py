@@ -18,6 +18,7 @@ class FDTD:
         device=None,
         cfl_factor=0.5,
         pml_layers=8,
+        dims_include_pml=False,
         dtype=torch.float32,
     ):
         self.ds = ds
@@ -34,10 +35,21 @@ class FDTD:
         self.pressure_coef = self.AIR_DENSITY * self.C**2 * self.dt / self.ds
         self.vel_coef = self.dt / (self.ds * self.AIR_DENSITY)
         self.dtype = dtype
-        self.box_dimensions = box_dimensions
-        self.grid_dimensions = (
-            torch.round(torch.as_tensor(box_dimensions) / self.ds).int().tolist()
+
+        self.box_dimensions = (
+            box_dimensions
+            if dims_include_pml
+            else [dim + (2 * pml_layers) * ds for dim in box_dimensions]
         )
+        self.grid_dimensions = (
+            (
+                (0 if dims_include_pml else 2 * pml_layers)
+                + torch.round(torch.as_tensor(box_dimensions) / self.ds)
+            )
+            .int()
+            .tolist()
+        )
+
         self.pressure = torch.empty(
             self.grid_dimensions, dtype=dtype, device=self.device
         )
