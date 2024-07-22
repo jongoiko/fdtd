@@ -210,12 +210,9 @@ class FDTD:
         return self
 
     def world_to_grid_coords(self, position):
+        position = np.array(position) + np.array(self.box_dimensions) / 2
         return (
-            (
-                np.array(self.grid_dimensions)
-                * np.array(position)
-                / np.array(self.box_dimensions)
-            )
+            (np.array(self.grid_dimensions) * position / np.array(self.box_dimensions))
             .round()
             .astype(int)
         )
