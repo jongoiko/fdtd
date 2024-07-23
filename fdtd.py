@@ -200,6 +200,7 @@ class FDTD:
                 np.cos(angle[0]) * np.cos(angle[1]),
             ]
         )
+        normal /= np.linalg.norm(normal)
         basis_1, basis_2 = FDTD._normal_to_plane_basis(normal)
         for theta in np.linspace(-np.pi, np.pi, 1000):
             points = [
