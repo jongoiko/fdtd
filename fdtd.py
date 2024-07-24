@@ -231,15 +231,21 @@ class FDTD:
         )
 
     @staticmethod
-    def _normal_to_plane_basis(normal):
-        basis_1 = np.array([normal[0] + 1] + normal[1:].tolist())
-        basis_1 -= (basis_1 @ normal) * normal
-        basis_1 /= np.linalg.norm(basis_1)
-        basis_2 = np.cross(normal, basis_1)
-        basis_2 /= np.linalg.norm(basis_2)
+    def _normal_to_plane_basis(normal, atol=3e-8):
+        vectors = [
+            np.array([0, normal[2], -normal[1]]),
+            np.array([-normal[2], 0, normal[0]]),
+            np.array([normal[1], -normal[0], 0]),
+        ]
+        basis = []
+        for vector in vectors:
+            if not np.allclose(vector, 0.0):
+                basis.append(vector / np.linalg.norm(vector))
+            if len(basis) == 2:
+                break
         assert (
-            np.isclose(basis_1 @ normal, 0.0)
-            and np.isclose(basis_1 @ basis_2, 0.0)
-            and np.isclose(basis_2 @ normal, 0.0)
+            np.isclose(basis[0] @ normal, 0.0, atol=atol)
+            and np.isclose(basis[0] @ basis[1], 0.0, atol=atol)
+            and np.isclose(basis[1] @ normal, 0.0, atol=atol)
         )
-        return basis_1, basis_2
+        return basis[0], basis[1]
