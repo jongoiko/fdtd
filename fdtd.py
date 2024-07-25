@@ -23,13 +23,13 @@ def _fdtd_step(
     base_pressure,
 ):
     new_vel_x = solid_damping * (
-        vel_x - vel_coef * (jnp.roll(pressure, -1, axis=0) - pressure)
+        vel_x - vel_coef * (-pressure).at[:-1, :, :].add(pressure[1:, :, :])
     )
     new_vel_y = solid_damping * (
-        vel_y - vel_coef * (jnp.roll(pressure, -1, axis=1) - pressure)
+        vel_y - vel_coef * (-pressure).at[:, :-1, :].add(pressure[:, 1:, :])
     )
     new_vel_z = solid_damping * (
-        vel_z - vel_coef * (jnp.roll(pressure, -1, axis=2) - pressure)
+        vel_z - vel_coef * (-pressure).at[:, :, :-1].add(pressure[:, :, 1:])
     )
 
     phase = jnp.sin(2 * jnp.pi * emitter_freqs * t - emitter_phases)
@@ -55,12 +55,9 @@ def _fdtd_step(
         pressure
         - pressure_coef
         * (
-            new_vel_x
-            - jnp.roll(new_vel_x, 1, axis=0)
-            + new_vel_y
-            - jnp.roll(new_vel_y, 1, axis=1)
-            + new_vel_z
-            - jnp.roll(new_vel_z, 1, axis=2)
+            new_vel_x.at[1:, :, :].add(-new_vel_x[:-1, :, :])
+            + new_vel_y.at[:, 1:, :].add(-new_vel_y[:, :-1, :])
+            + new_vel_z.at[:, :, 1:].add(-new_vel_z[:, :, :-1])
         )
     ) / attenuation_dt
 
