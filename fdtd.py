@@ -100,7 +100,7 @@ class FDTD:
         self.grid_dimensions = (
             (
                 (0 if dims_include_pml else 2 * pml_layers)
-                + jnp.round(jnp.array(box_dimensions) / self.ds)
+                + jnp.round(jnp.asarray(box_dimensions) / self.ds)
             )
             .astype(int)
             .tolist()
@@ -213,7 +213,7 @@ class FDTD:
 
     def add_circular_emitter(self, position, amp, freq, phase, angle, radius):
         self._assert_can_add_emitter()
-        normal = jnp.array(
+        normal = jnp.asarray(
             [
                 jnp.sin(angle[0]),
                 jnp.cos(angle[0]) * jnp.cos(jnp.pi / 2 + angle[1]),
@@ -222,18 +222,22 @@ class FDTD:
         )
         normal /= jnp.linalg.norm(normal)
         basis_1, basis_2 = FDTD._normal_to_plane_basis(normal)
-        circle_indices = ([], [], [])
-        for theta in jnp.linspace(-jnp.pi, jnp.pi, 1000):
-            points = [
+        angles = jnp.linspace(-jnp.pi, jnp.pi, 1000).reshape(-1, 1)
+        points = jnp.hstack(
+            [
                 self.world_to_grid_coords(
                     (
-                        jnp.array(position)
-                        + radius * (jnp.cos(angle) * basis_1 + jnp.sin(angle) * basis_2)
+                        jnp.asarray(position)
+                        + radius * (jnp.cos(theta) * basis_1 + jnp.sin(theta) * basis_2)
                     )
                 )
-                for angle in [theta, theta + jnp.pi]
+                for theta in [angles, angles + jnp.pi]
             ]
-            line = skimage.draw.line_nd(*points)
+        )
+        points = jnp.unique(points, axis=0)
+        circle_indices = ([], [], [])
+        for point_pair in points:
+            line = skimage.draw.line_nd(point_pair[:3], point_pair[3:])
             for i, line_axis in enumerate(line):
                 circle_indices[i].append(line_axis)
         circle_indices = tuple([np.concatenate(axis) for axis in circle_indices])
@@ -245,12 +249,12 @@ class FDTD:
         return self
 
     def world_to_grid_coords(self, position):
-        position = jnp.array(position) + jnp.array(self.box_dimensions) / 2
+        position = jnp.asarray(position) + jnp.asarray(self.box_dimensions) / 2
         return (
             (
-                jnp.array(self.grid_dimensions)
+                jnp.asarray(self.grid_dimensions)
                 * position
-                / jnp.array(self.box_dimensions)
+                / jnp.asarray(self.box_dimensions)
             )
             .round()
             .astype(int)
@@ -259,9 +263,9 @@ class FDTD:
     @staticmethod
     def _normal_to_plane_basis(normal, atol=3e-8):
         vectors = [
-            jnp.array([0, normal[2], -normal[1]]),
-            jnp.array([-normal[2], 0, normal[0]]),
-            jnp.array([normal[1], -normal[0], 0]),
+            jnp.asarray([0, normal[2], -normal[1]]),
+            jnp.asarray([-normal[2], 0, normal[0]]),
+            jnp.asarray([normal[1], -normal[0], 0]),
         ]
         basis = []
         for vector in vectors:
