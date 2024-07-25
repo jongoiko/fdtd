@@ -1,7 +1,76 @@
 import numpy as np
-import torch
+import jax
+import jax.numpy as jnp
 import skimage.draw
 from tqdm import tqdm
+
+
+def _fdtd_step(
+    pressure,
+    vel_x,
+    vel_y,
+    vel_z,
+    vel_coef,
+    pressure_coef,
+    solid_damping,
+    emitter_amps,
+    emitter_freqs,
+    emitter_phases,
+    emitter_angles,
+    is_point_emitter,
+    t,
+    attenuation_dt,
+    base_pressure,
+):
+    new_vel_x = solid_damping * (
+        vel_x - vel_coef * (jnp.roll(pressure, -1, axis=0) - pressure)
+    )
+    new_vel_y = solid_damping * (
+        vel_y - vel_coef * (jnp.roll(pressure, -1, axis=1) - pressure)
+    )
+    new_vel_z = solid_damping * (
+        vel_z - vel_coef * (jnp.roll(pressure, -1, axis=2) - pressure)
+    )
+
+    phase = jnp.sin(2 * jnp.pi * emitter_freqs * t - emitter_phases)
+
+    directed_emitter_amps = jnp.where(
+        jnp.logical_not(is_point_emitter), emitter_amps, 0.0
+    )
+
+    new_vel_x = (
+        new_vel_x * (1 - directed_emitter_amps)
+        + directed_emitter_amps * emitter_angles[..., 0] * phase
+    )
+    new_vel_y = (
+        new_vel_y * (1 - directed_emitter_amps)
+        + directed_emitter_amps * emitter_angles[..., 1] * phase
+    )
+    new_vel_z = (
+        new_vel_z * (1 - directed_emitter_amps)
+        + directed_emitter_amps * emitter_angles[..., 2] * phase
+    )
+
+    new_pressure = (
+        pressure
+        - pressure_coef
+        * (
+            new_vel_x
+            - jnp.roll(new_vel_x, 1, axis=0)
+            + new_vel_y
+            - jnp.roll(new_vel_y, 1, axis=1)
+            + new_vel_z
+            - jnp.roll(new_vel_z, 1, axis=2)
+        )
+    ) / attenuation_dt
+
+    point_emitter_amps = jnp.where(is_point_emitter, emitter_amps, 0.0)
+    new_pressure = (
+        jnp.where(jnp.logical_not(is_point_emitter), new_pressure, base_pressure)
+        + phase * point_emitter_amps
+    )
+
+    return new_pressure, new_vel_x, new_vel_y, new_vel_z
 
 
 class FDTD:
@@ -15,23 +84,13 @@ class FDTD:
         box_dimensions,
         ds,
         solid,
-        device=None,
         cfl_factor=0.5,
         pml_layers=8,
         dims_include_pml=False,
-        dtype=torch.float32,
+        dtype=jnp.float32,
     ):
         self.ds = ds
-        self.device = (
-            device
-            if device is not None
-            else (
-                torch.device("cuda")
-                if torch.cuda.is_available()
-                else torch.device("cpu")
-            )
-        )
-        self.dt = cfl_factor * self.ds / (np.sqrt(2) * self.C)
+        self.dt = cfl_factor * self.ds / (jnp.sqrt(2) * self.C)
         self.pressure_coef = self.AIR_DENSITY * self.C**2 * self.dt / self.ds
         self.vel_coef = self.dt / (self.ds * self.AIR_DENSITY)
         self.dtype = dtype
@@ -44,68 +103,57 @@ class FDTD:
         self.grid_dimensions = (
             (
                 (0 if dims_include_pml else 2 * pml_layers)
-                + torch.round(torch.as_tensor(box_dimensions) / self.ds)
+                + jnp.round(jnp.array(box_dimensions) / self.ds)
             )
-            .int()
+            .astype(int)
             .tolist()
         )
 
-        self.pressure = torch.empty(
-            self.grid_dimensions, dtype=dtype, device=self.device
-        )
-        self.vel_x = torch.empty(self.grid_dimensions, dtype=dtype, device=self.device)
-        self.vel_y = torch.empty(self.grid_dimensions, dtype=dtype, device=self.device)
-        self.vel_z = torch.empty(self.grid_dimensions, dtype=dtype, device=self.device)
-        self.attenuation = torch.ones(
-            self.grid_dimensions, dtype=dtype, device=self.device
-        )
-        self.amplitude = torch.zeros(
-            self.grid_dimensions, dtype=dtype, device=self.device
-        )
+        self.pressure = jnp.empty(self.grid_dimensions, dtype=dtype)
+        self.vel_x = jnp.empty(self.grid_dimensions, dtype=dtype)
+        self.vel_y = jnp.empty(self.grid_dimensions, dtype=dtype)
+        self.vel_z = jnp.empty(self.grid_dimensions, dtype=dtype)
+        self.attenuation = jnp.ones(self.grid_dimensions, dtype=dtype)
+        self.amplitude = jnp.zeros(self.grid_dimensions, dtype=dtype)
         self._make_pml(pml_layers)
         self.solid = solid
-        self.emitter_amps = torch.zeros(
-            self.grid_dimensions, dtype=dtype, device=self.device
-        )
-        self.emitter_freqs = torch.zeros(
-            self.grid_dimensions, dtype=dtype, device=self.device
-        )
-        self.emitter_phases = torch.zeros(
-            self.grid_dimensions, dtype=dtype, device=self.device
-        )
-        self.emitter_angles = torch.zeros(
-            self.grid_dimensions + [3], dtype=dtype, device=self.device
-        )
-        self.is_point_emitter = torch.zeros(
-            self.grid_dimensions, dtype=bool, device=self.device
-        )
+        self.emitter_amps = jnp.zeros(self.grid_dimensions, dtype=dtype)
+        self.emitter_freqs = jnp.zeros(self.grid_dimensions, dtype=dtype)
+        self.emitter_phases = jnp.zeros(self.grid_dimensions, dtype=dtype)
+        self.emitter_angles = jnp.zeros(self.grid_dimensions + [3], dtype=dtype)
+        self.is_point_emitter = jnp.zeros(self.grid_dimensions, dtype=bool)
+        self.fdtd_step = jax.jit(_fdtd_step)
         self.reset()
 
     def _make_pml(self, pml_layers):
         sigma_max = 0.5 / self.dt
         for i in range(pml_layers):
             j = None if i == 0 else -i
-            self.attenuation[i, i:j, i:j] = self.attenuation[
-                -1 - i, i:j, i:j
-            ] = self.attenuation[i:j, i, i:j] = self.attenuation[
-                i:j, -1 - i, i:j
-            ] = self.attenuation[
-                i:j, i:j, i
-            ] = self.attenuation[
-                i:j, i:j, -1 - i
-            ] = sigma_max * (
-                1 - i / pml_layers
+            attenuation = sigma_max * (1 - i / pml_layers)
+            self.attenuation = (
+                self.attenuation.at[i, i:j, i:j]
+                .set(attenuation)
+                .at[-1 - i, i:j, i:j]
+                .set(attenuation)
+                .at[i:j, i, i:j]
+                .set(attenuation)
+                .at[i:j, -1 - i, i:j]
+                .set(attenuation)
+                .at[i:j, i:j, i]
+                .set(attenuation)
+                .at[i:j, i:j, -1 - i]
+                .set(attenuation)
             )
 
     def reset(self):
-        self.pressure[...] = self.BASE_PRESSURE
-        self.vel_x[...] = self.vel_y[...] = self.vel_z[...] = 0
+        self.pressure = self.pressure.at[...].set(self.BASE_PRESSURE)
+        self.vel_x = self.vel_x.at[...].set(0)
+        self.vel_y = self.vel_y.at[...].set(0)
+        self.vel_z = self.vel_z.at[...].set(0)
         self.solid_damping = (
-            (1 - torch.as_tensor(self.solid).to(self.device))
-            * self.DAMPING_COEF
-            / (self.attenuation * self.dt + 1)
+            (1 - self.solid) * self.DAMPING_COEF / (self.attenuation * self.dt + 1)
         )
-        self.amplitude[...] = 0
+        self.amplitude = self.amplitude.at[...].set(0)
         self.t = 0
 
     def iterate(
@@ -126,47 +174,22 @@ class FDTD:
         attenuation_dt = self.attenuation * self.dt + 1
         iter_range = tqdm(range(iters)) if show_progress else range(iters)
         for i in iter_range:
-            self.vel_x -= self.vel_coef * (
-                torch.roll(self.pressure, -1, dims=0) - self.pressure
-            )
-            self.vel_x *= self.solid_damping
-            self.vel_y -= self.vel_coef * (
-                torch.roll(self.pressure, -1, dims=1) - self.pressure
-            )
-            self.vel_y *= self.solid_damping
-            self.vel_z -= self.vel_coef * (
-                torch.roll(self.pressure, -1, dims=2) - self.pressure
-            )
-            self.vel_z *= self.solid_damping
-
-            phase = torch.sin(
-                2 * np.pi * self.emitter_freqs * self.t - self.emitter_phases
-            ).to(self.device)
-
-            directed_emitter_amps = self.emitter_amps.where(
-                self.is_point_emitter.logical_not(), 0.0
-            )
-            self.vel_x *= 1 - directed_emitter_amps
-            self.vel_x += directed_emitter_amps * self.emitter_angles[..., 0] * phase
-            self.vel_y *= 1 - directed_emitter_amps
-            self.vel_y += directed_emitter_amps * self.emitter_angles[..., 1] * phase
-            self.vel_z *= 1 - directed_emitter_amps
-            self.vel_z += directed_emitter_amps * self.emitter_angles[..., 2] * phase
-
-            self.pressure -= self.pressure_coef * (
-                self.vel_x
-                - torch.roll(self.vel_x, 1, dims=0)
-                + self.vel_y
-                - torch.roll(self.vel_y, 1, dims=1)
-                + self.vel_z
-                - torch.roll(self.vel_z, 1, dims=2)
-            )
-
-            self.pressure /= attenuation_dt
-
-            self.pressure[self.emitter_amps != 0] = self.BASE_PRESSURE
-            self.pressure += (self.emitter_amps * phase).where(
-                self.is_point_emitter, 0.0
+            self.pressure, self.vel_x, self.vel_y, self.vel_z = self.fdtd_step(
+                self.pressure,
+                self.vel_x,
+                self.vel_y,
+                self.vel_z,
+                self.vel_coef,
+                self.pressure_coef,
+                self.solid_damping,
+                self.emitter_amps,
+                self.emitter_freqs,
+                self.emitter_phases,
+                self.emitter_angles,
+                self.is_point_emitter,
+                self.t,
+                attenuation_dt,
+                self.BASE_PRESSURE,
             )
 
             if amp_measurement_warmup is not None and i >= amp_measurement_warmup:
@@ -175,7 +198,7 @@ class FDTD:
             self.t += self.dt
 
     def _get_amp(self):
-        self.amplitude = torch.maximum(self.amplitude, torch.abs(self.pressure))
+        self.amplitude = jnp.maximum(self.amplitude, jnp.abs(self.pressure))
 
     def _assert_can_add_emitter(self):
         assert (
@@ -185,47 +208,53 @@ class FDTD:
     def add_point_emitter(self, position, amp, freq, phase):
         self._assert_can_add_emitter()
         position = self.world_to_grid_coords(position)
-        self.emitter_amps[*position] = amp
-        self.emitter_freqs[*position] = freq
-        self.emitter_phases[*position] = phase
-        self.is_point_emitter[*position] = True
+        self.emitter_amps = self.emitter_amps.at[*position].set(amp)
+        self.emitter_freqs = self.emitter_freqs.at[*position].set(freq)
+        self.emitter_phase = self.emitter_phases.at[*position].set(phase)
+        self.is_point_emitter = self.is_point_emitter.at[*position].set(True)
         return self
 
     def add_circular_emitter(self, position, amp, freq, phase, angle, radius):
         self._assert_can_add_emitter()
-        normal = np.array(
+        normal = jnp.array(
             [
-                np.sin(angle[0]),
-                np.cos(angle[0]) * np.cos(np.pi / 2 + angle[1]),
-                np.cos(angle[0]) * np.cos(angle[1]),
+                jnp.sin(angle[0]),
+                jnp.cos(angle[0]) * jnp.cos(jnp.pi / 2 + angle[1]),
+                jnp.cos(angle[0]) * jnp.cos(angle[1]),
             ]
         )
-        normal /= np.linalg.norm(normal)
+        normal /= jnp.linalg.norm(normal)
         basis_1, basis_2 = FDTD._normal_to_plane_basis(normal)
-        for theta in np.linspace(-np.pi, np.pi, 1000):
+        circle_indices = ([], [], [])
+        for theta in jnp.linspace(-jnp.pi, jnp.pi, 1000):
             points = [
                 self.world_to_grid_coords(
                     (
-                        position
-                        + radius * (np.cos(angle) * basis_1 + np.sin(angle) * basis_2)
+                        jnp.array(position)
+                        + radius * (jnp.cos(angle) * basis_1 + jnp.sin(angle) * basis_2)
                     )
                 )
-                for angle in [theta, theta + np.pi]
+                for angle in [theta, theta + jnp.pi]
             ]
             line = skimage.draw.line_nd(*points)
-            self.emitter_amps[line] = amp
-            self.emitter_freqs[line] = freq
-            self.emitter_phases[line] = phase
-            self.emitter_angles[line] = torch.as_tensor(
-                normal, dtype=self.emitter_angles.dtype, device=self.device
-            )
-            self.is_point_emitter[line] = False
+            for i, line_axis in enumerate(line):
+                circle_indices[i].append(line_axis)
+        circle_indices = tuple([np.concatenate(axis) for axis in circle_indices])
+        self.emitter_amps = self.emitter_amps.at[circle_indices].set(amp)
+        self.emitter_freqs = self.emitter_freqs.at[circle_indices].set(freq)
+        self.emitter_phases = self.emitter_phases.at[circle_indices].set(phase)
+        self.emitter_angles = self.emitter_angles.at[circle_indices].set(normal)
+        self.is_point_emitter = self.is_point_emitter.at[circle_indices].set(False)
         return self
 
     def world_to_grid_coords(self, position):
-        position = np.array(position) + np.array(self.box_dimensions) / 2
+        position = jnp.array(position) + jnp.array(self.box_dimensions) / 2
         return (
-            (np.array(self.grid_dimensions) * position / np.array(self.box_dimensions))
+            (
+                jnp.array(self.grid_dimensions)
+                * position
+                / jnp.array(self.box_dimensions)
+            )
             .round()
             .astype(int)
         )
@@ -233,19 +262,19 @@ class FDTD:
     @staticmethod
     def _normal_to_plane_basis(normal, atol=3e-8):
         vectors = [
-            np.array([0, normal[2], -normal[1]]),
-            np.array([-normal[2], 0, normal[0]]),
-            np.array([normal[1], -normal[0], 0]),
+            jnp.array([0, normal[2], -normal[1]]),
+            jnp.array([-normal[2], 0, normal[0]]),
+            jnp.array([normal[1], -normal[0], 0]),
         ]
         basis = []
         for vector in vectors:
-            if not np.allclose(vector, 0.0):
-                basis.append(vector / np.linalg.norm(vector))
+            if not jnp.allclose(vector, 0.0):
+                basis.append(vector / jnp.linalg.norm(vector))
             if len(basis) == 2:
                 break
         assert (
-            np.isclose(basis[0] @ normal, 0.0, atol=atol)
-            and np.isclose(basis[0] @ basis[1], 0.0, atol=atol)
-            and np.isclose(basis[1] @ normal, 0.0, atol=atol)
+            jnp.isclose(basis[0] @ normal, 0.0, atol=atol)
+            and jnp.isclose(basis[0] @ basis[1], 0.0, atol=atol)
+            and jnp.isclose(basis[1] @ normal, 0.0, atol=atol)
         )
         return basis[0], basis[1]
