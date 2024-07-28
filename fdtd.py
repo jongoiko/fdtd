@@ -110,7 +110,7 @@ class FDTD:
         self.vel_x = jnp.empty(self.grid_dimensions, dtype=dtype)
         self.vel_y = jnp.empty(self.grid_dimensions, dtype=dtype)
         self.vel_z = jnp.empty(self.grid_dimensions, dtype=dtype)
-        self.attenuation = jnp.ones(self.grid_dimensions, dtype=dtype)
+        self.attenuation = jnp.zeros(self.grid_dimensions, dtype=dtype)
         self.amplitude = jnp.zeros(self.grid_dimensions, dtype=dtype)
         self._make_pml(pml_layers)
         self.solid = solid
