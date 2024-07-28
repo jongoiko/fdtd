@@ -71,7 +71,7 @@ def _fdtd_step(
 
 
 class FDTD:
-    C = 340.3
+    C = 343
     AIR_DENSITY = 1.225
     BASE_PRESSURE = 0
     DAMPING_COEF = 0.999
