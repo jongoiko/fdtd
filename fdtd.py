@@ -198,9 +198,11 @@ class FDTD:
         self.amplitude = jnp.maximum(self.amplitude, jnp.abs(self.pressure))
 
     def _assert_can_add_emitter(self):
-        assert (
-            self.t == 0
-        ), "Cannot add an emitter to a started simulation. Re-instantiate the object or call reset()"
+        if self.t == 0:
+            return
+        raise ValueError(
+            "Cannot add an emitter to a started simulation. Re-instantiate the object or call reset()"
+        )
 
     def add_point_emitter(self, position, amp, freq, phase):
         self._assert_can_add_emitter()
