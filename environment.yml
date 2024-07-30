@@ -1,0 +1,15 @@
+name: fdtd
+channels:
+- conda-forge
+dependencies:
+- ipykernel
+- ipympl
+- line_profiler
+- matplotlib
+- numpy
+- polyscope
+- python=3.11
+- scikit-image
+- tqdm
+- pip:
+  - -r requirements.txt
