@@ -35,23 +35,27 @@ def _fdtd_step(
 
     phase = jnp.sin(2 * jnp.pi * emitter_freqs * t - emitter_phases)
 
+    directed_emitter_amps = jnp.where(
+        jnp.logical_not(is_point_emitter), emitter_amps, 0.0
+    )
+
     new_vel_x = (
         new_vel_x.at[*emitter_positions]
-        .mul(1 - emitter_amps)
+        .mul(1 - directed_emitter_amps)
         .at[*emitter_positions]
-        .add(emitter_amps * emitter_angles[..., 0] * phase)
+        .add(directed_emitter_amps * emitter_angles[..., 0] * phase)
     )
     new_vel_y = (
         new_vel_y.at[*emitter_positions]
-        .mul(1 - emitter_amps)
+        .mul(1 - directed_emitter_amps)
         .at[*emitter_positions]
-        .add(emitter_amps * emitter_angles[..., 1] * phase)
+        .add(directed_emitter_amps * emitter_angles[..., 1] * phase)
     )
     new_vel_z = (
         new_vel_z.at[*emitter_positions]
-        .mul(1 - emitter_amps)
+        .mul(1 - directed_emitter_amps)
         .at[*emitter_positions]
-        .add(emitter_amps * emitter_angles[..., 2] * phase)
+        .add(directed_emitter_amps * emitter_angles[..., 2] * phase)
     )
 
     new_pressure = (
@@ -63,6 +67,21 @@ def _fdtd_step(
             + new_vel_z.at[:, :, 1:].add(-new_vel_z[:, :, :-1])
         )
     ) / attenuation_dt
+
+    point_emitter_amps = jnp.where(is_point_emitter, emitter_amps, 0.0)
+    # Out of bounds indices are ignored in .set(), .add(), etc., so we use them
+    # to only select the positions of point emitters.
+    out_of_bounds = jnp.max(jnp.asarray(pressure.shape)) + 1
+    point_emitter_positions = jnp.where(
+        is_point_emitter, emitter_positions, out_of_bounds
+    )
+
+    new_pressure = (
+        new_pressure.at[*point_emitter_positions]
+        .set(base_pressure)
+        .at[*point_emitter_positions]
+        .add(phase * point_emitter_amps)
+    )
 
     return new_pressure, new_vel_x, new_vel_y, new_vel_z
 
@@ -206,10 +225,14 @@ class FDTD:
     def add_point_emitter(self, position, amp, freq, phase):
         self._assert_can_add_emitter()
         position = self.world_to_grid_coords(position)
-        self.emitter_amps = self.emitter_amps.at[*position].set(amp)
-        self.emitter_freqs = self.emitter_freqs.at[*position].set(freq)
-        self.emitter_phase = self.emitter_phases.at[*position].set(phase)
-        self.is_point_emitter = self.is_point_emitter.at[*position].set(True)
+        self.emitter_positions = jnp.hstack(
+            (self.emitter_positions, position.reshape(-1, 1))
+        )
+        self.emitter_amps = jnp.append(self.emitter_amps, amp)
+        self.emitter_freqs = jnp.append(self.emitter_freqs, freq)
+        self.emitter_phases = jnp.append(self.emitter_phases, phase)
+        self.emitter_angles = jnp.vstack((self.emitter_angles, jnp.empty((1, 3))))
+        self.is_point_emitter = jnp.append(self.is_point_emitter, True)
         return self
 
     def add_circular_emitter(self, position, amp, freq, phase, angle, radius):
