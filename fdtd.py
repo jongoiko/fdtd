@@ -1,10 +1,9 @@
-import numpy as np
 import jax
 import jax.numpy as jnp
-import skimage.draw
 from tqdm import tqdm
 
 
+@jax.jit
 def _fdtd_step(
     pressure,
     vel_x,
@@ -87,6 +86,18 @@ def _fdtd_step(
     return new_pressure, new_vel_x, new_vel_y, new_vel_z
 
 
+@jax.jit
+def _round_bresenham_coords(coords):
+    use_floor = jnp.repeat(
+        ((coords[..., 0] % 1 == 0.5) & (coords[..., 1] - coords[..., 0] == 1))[
+            ..., jnp.newaxis
+        ],
+        repeats=coords.shape[2],
+        axis=2,
+    )
+    return jax.lax.select(use_floor, jnp.floor(coords), jnp.round(coords)).astype(int)
+
+
 class FDTD:
     C = 343
     AIR_DENSITY = 1.225
@@ -137,7 +148,6 @@ class FDTD:
         self.emitter_phases = jnp.zeros((0,), dtype=dtype)
         self.emitter_angles = jnp.zeros((0, 3), dtype=dtype)
         self.is_point_emitter = jnp.zeros((0,), dtype=bool)
-        self.fdtd_step = jax.jit(_fdtd_step)
         self.reset()
 
     def _make_pml(self, pml_layers):
@@ -189,7 +199,7 @@ class FDTD:
         attenuation_dt = self.attenuation * self.dt + 1
         iter_range = tqdm(range(iters)) if show_progress else range(iters)
         for i in iter_range:
-            self.pressure, self.vel_x, self.vel_y, self.vel_z = self.fdtd_step(
+            self.pressure, self.vel_x, self.vel_y, self.vel_z = _fdtd_step(
                 self.pressure,
                 self.vel_x,
                 self.vel_y,
@@ -260,13 +270,9 @@ class FDTD:
             ]
         )
         points = jnp.unique(points, axis=0)
-        circle_indices = ([], [], [])
-        for point_pair in points:
-            line = skimage.draw.line_nd(point_pair[:3], point_pair[3:])
-            for i, line_axis in enumerate(line):
-                circle_indices[i].append(line_axis)
+        circle_indices = FDTD._bresenham_line(points[:, :3], points[:, 3:])
         circle_indices = jnp.unique(
-            jnp.vstack([jnp.concatenate(axis) for axis in circle_indices]), axis=1
+            jnp.vstack([axis.reshape(-1) for axis in circle_indices]), axis=1
         )
         num_voxels = circle_indices.shape[1]
         self.emitter_positions = jnp.hstack((self.emitter_positions, circle_indices))
@@ -318,3 +324,12 @@ class FDTD:
             and jnp.isclose(basis[1] @ normal, 0.0, atol=atol)
         )
         return basis[0], basis[1]
+
+    @staticmethod
+    def _bresenham_line(start, stop):
+        # See skimage.draw.line_nd
+        npoints = jnp.ceil(jnp.max(jnp.abs(stop - start))).astype(int)
+        coords = _round_bresenham_coords(
+            jnp.linspace(start, stop, num=npoints, endpoint=False).T
+        )
+        return coords
