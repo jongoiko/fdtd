@@ -13,6 +13,7 @@ def _fdtd_step(
     vel_coef,
     pressure_coef,
     solid_damping,
+    emitter_positions,
     emitter_amps,
     emitter_freqs,
     emitter_phases,
@@ -34,21 +35,23 @@ def _fdtd_step(
 
     phase = jnp.sin(2 * jnp.pi * emitter_freqs * t - emitter_phases)
 
-    directed_emitter_amps = jnp.where(
-        jnp.logical_not(is_point_emitter), emitter_amps, 0.0
-    )
-
     new_vel_x = (
-        new_vel_x * (1 - directed_emitter_amps)
-        + directed_emitter_amps * emitter_angles[..., 0] * phase
+        new_vel_x.at[*emitter_positions]
+        .mul(1 - emitter_amps)
+        .at[*emitter_positions]
+        .add(emitter_amps * emitter_angles[..., 0] * phase)
     )
     new_vel_y = (
-        new_vel_y * (1 - directed_emitter_amps)
-        + directed_emitter_amps * emitter_angles[..., 1] * phase
+        new_vel_y.at[*emitter_positions]
+        .mul(1 - emitter_amps)
+        .at[*emitter_positions]
+        .add(emitter_amps * emitter_angles[..., 1] * phase)
     )
     new_vel_z = (
-        new_vel_z * (1 - directed_emitter_amps)
-        + directed_emitter_amps * emitter_angles[..., 2] * phase
+        new_vel_z.at[*emitter_positions]
+        .mul(1 - emitter_amps)
+        .at[*emitter_positions]
+        .add(emitter_amps * emitter_angles[..., 2] * phase)
     )
 
     new_pressure = (
@@ -60,12 +63,6 @@ def _fdtd_step(
             + new_vel_z.at[:, :, 1:].add(-new_vel_z[:, :, :-1])
         )
     ) / attenuation_dt
-
-    point_emitter_amps = jnp.where(is_point_emitter, emitter_amps, 0.0)
-    new_pressure = (
-        jnp.where(jnp.logical_not(is_point_emitter), new_pressure, base_pressure)
-        + phase * point_emitter_amps
-    )
 
     return new_pressure, new_vel_x, new_vel_y, new_vel_z
 
@@ -114,11 +111,12 @@ class FDTD:
         self.amplitude = jnp.zeros(self.grid_dimensions, dtype=dtype)
         self._make_pml(pml_layers)
         self.solid = solid
-        self.emitter_amps = jnp.zeros(self.grid_dimensions, dtype=dtype)
-        self.emitter_freqs = jnp.zeros(self.grid_dimensions, dtype=dtype)
-        self.emitter_phases = jnp.zeros(self.grid_dimensions, dtype=dtype)
-        self.emitter_angles = jnp.zeros(self.grid_dimensions + [3], dtype=dtype)
-        self.is_point_emitter = jnp.zeros(self.grid_dimensions, dtype=bool)
+        self.emitter_positions = jnp.zeros((3, 0), dtype=int)
+        self.emitter_amps = jnp.zeros((0,), dtype=dtype)
+        self.emitter_freqs = jnp.zeros((0,), dtype=dtype)
+        self.emitter_phases = jnp.zeros((0,), dtype=dtype)
+        self.emitter_angles = jnp.zeros((0, 3), dtype=dtype)
+        self.is_point_emitter = jnp.zeros((0,), dtype=bool)
         self.fdtd_step = jax.jit(_fdtd_step)
         self.reset()
 
@@ -179,6 +177,7 @@ class FDTD:
                 self.vel_coef,
                 self.pressure_coef,
                 self.solid_damping,
+                self.emitter_positions,
                 self.emitter_amps,
                 self.emitter_freqs,
                 self.emitter_phases,
@@ -242,12 +241,26 @@ class FDTD:
             line = skimage.draw.line_nd(point_pair[:3], point_pair[3:])
             for i, line_axis in enumerate(line):
                 circle_indices[i].append(line_axis)
-        circle_indices = tuple([np.concatenate(axis) for axis in circle_indices])
-        self.emitter_amps = self.emitter_amps.at[circle_indices].set(amp)
-        self.emitter_freqs = self.emitter_freqs.at[circle_indices].set(freq)
-        self.emitter_phases = self.emitter_phases.at[circle_indices].set(phase)
-        self.emitter_angles = self.emitter_angles.at[circle_indices].set(normal)
-        self.is_point_emitter = self.is_point_emitter.at[circle_indices].set(False)
+        circle_indices = jnp.unique(
+            jnp.vstack([jnp.concatenate(axis) for axis in circle_indices]), axis=1
+        )
+        num_voxels = circle_indices.shape[1]
+        self.emitter_positions = jnp.hstack((self.emitter_positions, circle_indices))
+        self.emitter_amps = jnp.concatenate(
+            (self.emitter_amps, jnp.full(num_voxels, amp))
+        )
+        self.emitter_freqs = jnp.concatenate(
+            (self.emitter_freqs, jnp.full(num_voxels, freq))
+        )
+        self.emitter_phases = jnp.concatenate(
+            (self.emitter_phases, jnp.full(num_voxels, phase))
+        )
+        self.emitter_angles = jnp.vstack(
+            (self.emitter_angles, jnp.full((num_voxels, 3), normal))
+        )
+        self.is_point_emitter = jnp.concatenate(
+            (self.is_point_emitter, jnp.full(num_voxels, False))
+        )
         return self
 
     def world_to_grid_coords(self, position):
