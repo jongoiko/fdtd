@@ -39,22 +39,23 @@ def _fdtd_step(
         jnp.logical_not(is_point_emitter), emitter_amps, 0.0
     )
 
+    emitter_positions_tuple = tuple(emitter_positions)
     new_vel_x = (
-        new_vel_x.at[*emitter_positions]
+        new_vel_x.at[emitter_positions_tuple]
         .mul(1 - directed_emitter_amps)
-        .at[*emitter_positions]
+        .at[emitter_positions_tuple]
         .add(directed_emitter_amps * emitter_angles[..., 0] * phase)
     )
     new_vel_y = (
-        new_vel_y.at[*emitter_positions]
+        new_vel_y.at[emitter_positions_tuple]
         .mul(1 - directed_emitter_amps)
-        .at[*emitter_positions]
+        .at[emitter_positions_tuple]
         .add(directed_emitter_amps * emitter_angles[..., 1] * phase)
     )
     new_vel_z = (
-        new_vel_z.at[*emitter_positions]
+        new_vel_z.at[emitter_positions_tuple]
         .mul(1 - directed_emitter_amps)
-        .at[*emitter_positions]
+        .at[emitter_positions_tuple]
         .add(directed_emitter_amps * emitter_angles[..., 2] * phase)
     )
 
@@ -72,14 +73,14 @@ def _fdtd_step(
     # Out of bounds indices are ignored in .set(), .add(), etc., so we use them
     # to only select the positions of point emitters.
     out_of_bounds = jnp.max(jnp.asarray(pressure.shape)) + 1
-    point_emitter_positions = jnp.where(
-        is_point_emitter, emitter_positions, out_of_bounds
+    point_emitter_positions = tuple(
+        jnp.where(is_point_emitter, emitter_positions, out_of_bounds)
     )
 
     new_pressure = (
-        new_pressure.at[*point_emitter_positions]
+        new_pressure.at[point_emitter_positions]
         .set(base_pressure)
-        .at[*point_emitter_positions]
+        .at[point_emitter_positions]
         .add(phase * point_emitter_amps)
     )
 
