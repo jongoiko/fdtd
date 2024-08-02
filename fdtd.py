@@ -108,7 +108,7 @@ class FDTD:
         self,
         box_dimensions,
         ds,
-        solid,
+        solid=None,
         cfl_factor=0.5,
         pml_layers=8,
         dims_include_pml=False,
@@ -141,7 +141,9 @@ class FDTD:
         self.attenuation = jnp.zeros(self.grid_dimensions, dtype=dtype)
         self.amplitude = jnp.zeros(self.grid_dimensions, dtype=dtype)
         self._make_pml(pml_layers)
-        self.solid = solid
+        self.solid = (
+            solid if solid is not None else jnp.zeros(self.grid_dimensions, dtype=bool)
+        )
 
         self.reset()
 
