@@ -142,12 +142,7 @@ class FDTD:
         self.amplitude = jnp.zeros(self.grid_dimensions, dtype=dtype)
         self._make_pml(pml_layers)
         self.solid = solid
-        self.emitter_positions = jnp.zeros((3, 0), dtype=int)
-        self.emitter_amps = jnp.zeros((0,), dtype=dtype)
-        self.emitter_freqs = jnp.zeros((0,), dtype=dtype)
-        self.emitter_phases = jnp.zeros((0,), dtype=dtype)
-        self.emitter_angles = jnp.zeros((0, 3), dtype=dtype)
-        self.is_point_emitter = jnp.zeros((0,), dtype=bool)
+
         self.reset()
 
     def _make_pml(self, pml_layers):
@@ -179,6 +174,12 @@ class FDTD:
             (1 - self.solid) * self.DAMPING_COEF / (self.attenuation * self.dt + 1)
         )
         self.amplitude = self.amplitude.at[...].set(0)
+        self.emitter_positions = []
+        self.emitter_amps = []
+        self.emitter_freqs = []
+        self.emitter_phases = []
+        self.emitter_angles = []
+        self.is_point_emitter = []
         self.t = 0
 
     def iterate(
@@ -195,6 +196,8 @@ class FDTD:
                 amp_measurement_warmup = round(amp_measurement_warmup / self.dt)
         if not warm_start:
             self.reset()
+        if self.t == 0:
+            self._build_emitter_arrays()
 
         attenuation_dt = self.attenuation * self.dt + 1
         iter_range = tqdm(range(iters)) if show_progress else range(iters)
@@ -236,14 +239,12 @@ class FDTD:
     def add_point_emitter(self, position, amp, freq, phase):
         self._assert_can_add_emitter()
         position = self.world_to_grid_coords(position)
-        self.emitter_positions = jnp.hstack(
-            (self.emitter_positions, position.reshape(-1, 1))
-        )
-        self.emitter_amps = jnp.append(self.emitter_amps, amp)
-        self.emitter_freqs = jnp.append(self.emitter_freqs, freq)
-        self.emitter_phases = jnp.append(self.emitter_phases, phase)
-        self.emitter_angles = jnp.vstack((self.emitter_angles, jnp.empty((1, 3))))
-        self.is_point_emitter = jnp.append(self.is_point_emitter, True)
+        self.emitter_positions.append(position.reshape(-1, 1))
+        self.emitter_amps.append(jnp.array([amp]))
+        self.emitter_freqs.append(jnp.array([freq]))
+        self.emitter_phases.append(jnp.array([phase]))
+        self.emitter_angles.append(jnp.empty((1, 3)))
+        self.is_point_emitter.append(jnp.array([True]))
         return self
 
     def add_circular_emitter(self, position, amp, freq, phase, angle, radius):
@@ -271,27 +272,33 @@ class FDTD:
         )
         points = jnp.unique(points, axis=0)
         circle_indices = FDTD._bresenham_line(points[:, :3], points[:, 3:])
-        circle_indices = jnp.unique(
-            jnp.vstack([axis.reshape(-1) for axis in circle_indices]), axis=1
-        )
+        circle_indices = jnp.vstack([axis.reshape(-1) for axis in circle_indices])
         num_voxels = circle_indices.shape[1]
-        self.emitter_positions = jnp.hstack((self.emitter_positions, circle_indices))
-        self.emitter_amps = jnp.concatenate(
-            (self.emitter_amps, jnp.full(num_voxels, amp))
-        )
-        self.emitter_freqs = jnp.concatenate(
-            (self.emitter_freqs, jnp.full(num_voxels, freq))
-        )
-        self.emitter_phases = jnp.concatenate(
-            (self.emitter_phases, jnp.full(num_voxels, phase))
-        )
-        self.emitter_angles = jnp.vstack(
-            (self.emitter_angles, jnp.full((num_voxels, 3), normal))
-        )
-        self.is_point_emitter = jnp.concatenate(
-            (self.is_point_emitter, jnp.full(num_voxels, False))
-        )
+        self.emitter_positions.append(circle_indices)
+        self.emitter_amps.append(jnp.full(num_voxels, amp))
+        self.emitter_freqs.append(jnp.full(num_voxels, freq))
+        self.emitter_phases.append(jnp.full(num_voxels, phase))
+        self.emitter_angles.append(jnp.full((num_voxels, 3), normal))
+        self.is_point_emitter.append(jnp.full(num_voxels, False))
         return self
+
+    def _build_emitter_arrays(self):
+        if len(self.emitter_positions) == 0:
+            self.emitter_positions = jnp.empty((3, 0)).astype(int)
+            self.emitter_amps = jnp.array([])
+            self.emitter_freqs = jnp.array([])
+            self.emitter_phases = jnp.array([])
+            self.emitter_angles = jnp.empty((0, 3))
+            self.is_point_emitter = jnp.array([], dtype=bool)
+            return
+        self.emitter_positions, indices = jnp.unique(
+            jnp.hstack(self.emitter_positions), axis=1, return_index=True
+        )
+        self.emitter_amps = jnp.concatenate(self.emitter_amps)[indices]
+        self.emitter_freqs = jnp.concatenate(self.emitter_freqs)[indices]
+        self.emitter_phases = jnp.concatenate(self.emitter_phases)[indices]
+        self.emitter_angles = jnp.vstack(self.emitter_angles)[indices]
+        self.is_point_emitter = jnp.concatenate(self.is_point_emitter)[indices]
 
     def world_to_grid_coords(self, position):
         position = jnp.asarray(position) + jnp.asarray(self.box_dimensions) / 2
